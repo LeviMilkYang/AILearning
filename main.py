@@ -1,58 +1,46 @@
-import numpy as np
+import torch
+import torch.nn as nn
+import math
+from SimpleTokenizer import SimpleTokenizer  # 假设你之前写的类保存在这个文件里
+from MultiHeadAttention import MultiHeadAttention
+from PositionalEncoding import PositionalEncoding
 
-
-def mean_squared_error(y_pred, y_true):
-    """
-    计算均方误差 (MSE) 损失
-    :param y_pred: 模型的预测值矩阵，形状为 (N, 1)
-    :param y_true: 真实的目标值矩阵，形状为 (N, 1)
-    :return: 一个标量（Scalar），代表整体的平均误差大小
-    """
-    # 1. 对应元素相减，得到误差矩阵
-    error = y_pred - y_true
+# --- 主测试流程 ---
+if __name__ == "__main__":
+    # 模拟一段语料并初始化分词器
+    corpus = "hello transformer, lets build a gpt step by step!"
+    tokenizer = SimpleTokenizer(corpus)
     
-    # 2. 对误差矩阵逐元素求平方（还记得前面讨论的元素级乘方吗？用 ** 2）
-    squared_error = error ** 2
+    # 超参数设置
+    d_model = 512
+    num_heads = 8
     
-    # 3. 求所有样本误差平方的平均值，得到最终的 Loss 标量
-    loss = np.mean(squared_error)
+    # 初始化我们今天的主角们
+    embedding = nn.Embedding(tokenizer.vocab_size, d_model)
+    pos_encoder = PositionalEncoding(d_model=d_model)
+    mha = MultiHeadAttention(d_model=d_model, num_heads=num_heads)
     
-    return loss
-
-# 1. 模拟输入数据：3 个样本，每个样本 2 个特征
-X = np.array([
-    [1.0, 2.0],
-    [2.0, 1.0],
-    [1.5, 1.5]
-])
-
-# --- 初始化第一层（隐藏层）的参数 ---
-W1 = np.array([
-    [0.1, 0.2, 0.3, 0.4],
-    [0.5, 0.6, 0.7, 0.8]
-]) # 形状 (2, 4)
-b1 = np.array([0.1, -0.1, 0.2, 0.0]) # 形状 (4,)
-
-# --- 初始化第二层（输出层）的参数 ---
-W2 = np.array([
-    [0.1],
-    [0.2],
-    [0.3],
-    [0.4]
-]) # 形状 (4, 1)
-b2 = np.array([0.05]) # 形状 (1,)
-
-
-# ==================== 开始前向传播 ====================
-
-# 第一步：隐藏层的线性变换 (X @ W1 + b1)
-Z1 = np.dot(X, W1) + b1  # 形状变成 (3, 4)
-
-# 第二步：隐藏层的非线性激活 (ReLU: 逐元素处理)
-A1 = np.maximum(0, Z1)   # 形状保持 (3, 4)
-
-# 第三步：输出层的线性变换 (A1 @ W2 + b2)
-Z2 = np.dot(A1, W2) + b2 # 形状变成 (3, 1)
-
-print("最终的前向传播输出预测值：")
-print(Z2)
+    # 模拟输入一句话
+    text = "hello"
+    input_ids = tokenizer.encode(text)  # 变成数字 ID 列表
+    print("1. 文本转数字 ID:", input_ids)
+    
+    # 转成 PyTorch 张量，并升维加上 Batch 维度 -> 形状: (Batch=1, Seq_Len)
+    x_ids = torch.tensor([input_ids], dtype=torch.long)
+    
+    # 2. 词嵌入：查表变成稠密向量 -> 形状: (1, Seq_Len, 512)
+    x_embed = embedding(x_ids)
+    print("2. 词嵌入后的形状:", x_embed.shape)
+    
+    # 3. 注入位置编码：E + P -> 形状保持: (1, Seq_Len, 512)
+    x_with_pos = pos_encoder(x_embed)
+    print("3. 注入位置编码后的形状:", x_with_pos.shape)
+    
+    # 4. 送入你的多头注意力机制
+    # 构造一个因果掩码 (根据当前的 Seq_Len 动态生成)
+    seq_len = x_ids.size(1)
+    mask = torch.tril(torch.ones(seq_len, seq_len))
+    
+    output = mha(x_with_pos, mask=mask)
+    print("4. 多头注意力输出的特征形状:", output.shape)
+    print("--- 恭喜！输入到注意力的整条流水线成功跑通！ ---")
