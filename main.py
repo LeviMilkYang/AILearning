@@ -44,3 +44,21 @@ if __name__ == "__main__":
     output = tf_block(x_with_pos, mask=mask)
     print("4. Transformer Block 输出的特征形状:", output.shape)
     print("--- 恭喜！输入到 Transformer Block 的整条流水线成功跑通！ ---")
+
+    # 5. 加上语言模型头 (LM Head)，把隐藏特征映射回词表大小
+    lm_head = nn.Linear(d_model, tokenizer.vocab_size)
+    
+    logits = lm_head(output)
+    print("5. LM Head 输出的 Logits 形状:", logits.shape)
+    
+    # 6. 演示如何预测下一个字
+    # 我们只看最后一个词预测出来的分数（logits 里取最后一个时间步）
+    last_token_logits = logits[:, -1, :]  # 形状: (1, vocab_size)
+    
+    # 用 argmax 挑出概率（分数）最高的那个字 ID
+    predicted_id = torch.argmax(last_token_logits, dim=-1).item()
+    
+    # 把 ID 解码成文字
+    predicted_char = tokenizer.decode([predicted_id])
+    print(f"输入文本: '{text}' -> 模型预测的下一个字符是: '{predicted_char}'")
+    print("--- 恭喜！一个微型 GPT 的前向预测闭环彻底大功告成！ ---")
