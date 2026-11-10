@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 from SimpleTokenizer import SimpleTokenizer  # 假设你之前写的类保存在这个文件里
-from MultiHeadAttention import MultiHeadAttention
+from TransformerBlock import TransformerBlock
 from PositionalEncoding import PositionalEncoding
 
 # --- 主测试流程 ---
@@ -18,7 +18,7 @@ if __name__ == "__main__":
     # 初始化我们今天的主角们
     embedding = nn.Embedding(tokenizer.vocab_size, d_model)
     pos_encoder = PositionalEncoding(d_model=d_model)
-    mha = MultiHeadAttention(d_model=d_model, num_heads=num_heads)
+    tf_block = TransformerBlock(d_model=d_model, num_heads=num_heads)
     
     # 模拟输入一句话
     text = "hello"
@@ -41,6 +41,6 @@ if __name__ == "__main__":
     seq_len = x_ids.size(1)
     mask = torch.tril(torch.ones(seq_len, seq_len))
     
-    output = mha(x_with_pos, mask=mask)
-    print("4. 多头注意力输出的特征形状:", output.shape)
-    print("--- 恭喜！输入到注意力的整条流水线成功跑通！ ---")
+    output = tf_block(x_with_pos, mask=mask)
+    print("4. Transformer Block 输出的特征形状:", output.shape)
+    print("--- 恭喜！输入到 Transformer Block 的整条流水线成功跑通！ ---")
