@@ -1,64 +1,131 @@
+import argparse
+from pathlib import Path
+
 import torch
 import torch.nn as nn
-import math
-from SimpleTokenizer import SimpleTokenizer  # 假设你之前写的类保存在这个文件里
-from TransformerBlock import TransformerBlock
+import torch.nn.functional as F
+
 from PositionalEncoding import PositionalEncoding
+from SimpleTokenizer import SimpleTokenizer
+from TransformerBlock import TransformerBlock
 
-# --- 主测试流程 ---
-if __name__ == "__main__":
-    # 模拟一段语料并初始化分词器
-    corpus = "hello transformer, lets build a gpt step by step!"
+
+DEMO_CORPUS = "hello transformer, lets build a gpt step by step!"
+
+
+class CharacterGPT(nn.Module):
+    def __init__(self, vocab_size, d_model, num_heads, context_length):
+        super().__init__()
+        self.context_length = context_length
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, max_len=context_length)
+        self.tf_block = TransformerBlock(d_model, num_heads)
+        self.lm_head = nn.Linear(d_model, vocab_size)
+
+    def forward(self, token_ids):
+        seq_len = token_ids.size(1)
+        x = self.pos_encoder(self.embedding(token_ids))
+        mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).tril()
+        return self.lm_head(self.tf_block(x, mask=mask))
+
+
+def train(corpus, steps, checkpoint_path):
+    torch.manual_seed(42)
     tokenizer = SimpleTokenizer(corpus)
-    
-    # 超参数设置
-    d_model = 512
-    num_heads = 8
-    
-    # 初始化我们今天的主角们
-    embedding = nn.Embedding(tokenizer.vocab_size, d_model)
-    pos_encoder = PositionalEncoding(d_model=d_model)
-    tf_block = TransformerBlock(d_model=d_model, num_heads=num_heads)
-    
-    # 模拟输入一句话
-    text = "hello"
-    input_ids = tokenizer.encode(text)  # 变成数字 ID 列表
-    print("1. 文本转数字 ID:", input_ids)
-    
-    # 转成 PyTorch 张量，并升维加上 Batch 维度 -> 形状: (Batch=1, Seq_Len)
-    x_ids = torch.tensor([input_ids], dtype=torch.long)
-    
-    # 2. 词嵌入：查表变成稠密向量 -> 形状: (1, Seq_Len, 512)
-    x_embed = embedding(x_ids)
-    print("2. 词嵌入后的形状:", x_embed.shape)
-    
-    # 3. 注入位置编码：E + P -> 形状保持: (1, Seq_Len, 512)
-    x_with_pos = pos_encoder(x_embed)
-    print("3. 注入位置编码后的形状:", x_with_pos.shape)
-    
-    # 4. 送入你的多头注意力机制
-    # 构造一个因果掩码 (根据当前的 Seq_Len 动态生成)
-    seq_len = x_ids.size(1)
-    mask = torch.tril(torch.ones(seq_len, seq_len))
-    
-    output = tf_block(x_with_pos, mask=mask)
-    print("4. Transformer Block 输出的特征形状:", output.shape)
-    print("--- 恭喜！输入到 Transformer Block 的整条流水线成功跑通！ ---")
+    config = {
+        "vocab_size": tokenizer.vocab_size,
+        "d_model": 64,
+        "num_heads": 4,
+        "context_length": min(16, len(corpus) - 1),
+    }
+    model = CharacterGPT(**config)
+    model.train()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3)
+    token_ids = torch.tensor(tokenizer.encode(corpus), dtype=torch.long)
+    context_length = config["context_length"]
+    offsets = torch.arange(context_length)
 
-    # 5. 加上语言模型头 (LM Head)，把隐藏特征映射回词表大小
-    lm_head = nn.Linear(d_model, tokenizer.vocab_size)
-    
-    logits = lm_head(output)
-    print("5. LM Head 输出的 Logits 形状:", logits.shape)
-    
-    # 6. 演示如何预测下一个字
-    # 我们只看最后一个词预测出来的分数（logits 里取最后一个时间步）
-    last_token_logits = logits[:, -1, :]  # 形状: (1, vocab_size)
-    
-    # 用 argmax 挑出概率（分数）最高的那个字 ID
-    predicted_id = torch.argmax(last_token_logits, dim=-1).item()
-    
-    # 把 ID 解码成文字
-    predicted_char = tokenizer.decode([predicted_id])
-    print(f"输入文本: '{text}' -> 模型预测的下一个字符是: '{predicted_char}'")
-    print("--- 恭喜！一个微型 GPT 的前向预测闭环彻底大功告成！ ---")
+    for step in range(1, steps + 1):
+        # 每个窗口的目标整体右移一位，让每个位置预测下一个字符。
+        starts = torch.randint(len(token_ids) - context_length, (16, 1))
+        positions = starts + offsets
+        inputs = token_ids[positions]
+        targets = token_ids[positions + 1]
+
+        optimizer.zero_grad()
+        logits = model(inputs)
+        loss = F.cross_entropy(logits.flatten(0, 1), targets.flatten())
+        loss.backward()
+        optimizer.step()
+
+        if step == 1 or step % 50 == 0 or step == steps:
+            print(f"step {step}/{steps}  loss={loss.item():.4f}")
+
+    torch.save(
+        {
+            "config": config,
+            # SimpleTokenizer 按字符排序分配 ID，因此保存词表即可重建映射。
+            "vocab": tokenizer.decode(range(tokenizer.vocab_size)),
+            "model_state_dict": model.state_dict(),
+        },
+        checkpoint_path,
+    )
+    print(f"Saved checkpoint to {checkpoint_path}")
+
+
+@torch.inference_mode()
+def generate(checkpoint_path, prompt, max_new_tokens):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    tokenizer = SimpleTokenizer(checkpoint["vocab"])
+    model = CharacterGPT(**checkpoint["config"])
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    token_ids = tokenizer.encode(prompt)
+    for _ in range(max_new_tokens):
+        # 只用最近的上下文预测下一字符，同时保留完整文本用于输出。
+        context = torch.tensor([token_ids[-model.context_length:]], dtype=torch.long)
+        logits = model(context)
+        next_id = logits[0, -1].argmax().item()
+        token_ids.append(next_id)
+
+    return tokenizer.decode(token_ids)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train or run a character-level GPT.")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    train_parser = commands.add_parser("train")
+    train_parser.add_argument("--corpus-file", type=Path, help="Optional UTF-8 training text.")
+    train_parser.add_argument("--steps", type=int, default=200)
+    train_parser.add_argument("--checkpoint", type=Path, default=Path("model.pt"))
+
+    generate_parser = commands.add_parser("generate")
+    generate_parser.add_argument("--prompt", required=True)
+    generate_parser.add_argument("--max-new-tokens", type=int, default=30)
+    generate_parser.add_argument("--checkpoint", type=Path, default=Path("model.pt"))
+
+    args = parser.parse_args()
+    # 小模型在 CPU 上用单线程，减少线程调度开销。
+    torch.set_num_threads(1)
+    if args.command == "train":
+        corpus = args.corpus_file.read_text(encoding="utf-8") if args.corpus_file else DEMO_CORPUS
+        if len(corpus) < 2:
+            train_parser.error("the corpus must contain at least two characters")
+        if args.steps < 1:
+            train_parser.error("--steps must be positive")
+        train(corpus, args.steps, args.checkpoint)
+    else:
+        if not args.prompt:
+            generate_parser.error("--prompt must not be empty")
+        if args.max_new_tokens < 0:
+            generate_parser.error("--max-new-tokens must be non-negative")
+        try:
+            print(generate(args.checkpoint, args.prompt, args.max_new_tokens))
+        except KeyError as error:
+            generate_parser.error(f"character not in the training vocabulary: {error}")
+
+
+if __name__ == "__main__":
+    main()

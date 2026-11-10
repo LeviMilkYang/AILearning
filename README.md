@@ -17,11 +17,18 @@ python -m venv .venv
 
 用 VS Code 打开项目，执行 `Python: Select Interpreter`，选择 `.venv\Scripts\python.exe`。之后新建终端会自动激活所选环境。
 
-运行示例：
+训练和生成可以分两次运行：
 
 ```powershell
-.\.venv\Scripts\python.exe main.py
+.\.venv\Scripts\python.exe main.py train --steps 200
+.\.venv\Scripts\python.exe main.py generate --prompt "hello" --max-new-tokens 44
 ```
+
+训练默认使用内置的一句话，也可以通过 `train --corpus-file` 指定 UTF-8 文本。每批从语料中抽取窗口，把目标向后错开一个字符，然后计算交叉熵、反向传播并用 AdamW 更新参数。
+
+训练结束后，`torch.save` 把 `model.state_dict()`、模型配置和字符词表一起写入 `model.pt`。生成进程用 `torch.load` 读取文件，按配置创建同样的模型，用 `load_state_dict()` 恢复权重，再切换到 `eval()`。词表让两个进程使用相同的字符 ID。生成时每次取最后一个位置分数最高的字符，追加到文本后继续预测。提示词只能使用训练词表中的字符。
+
+两个命令都支持 `--checkpoint` 指定同一个文件路径。当前检查点包含生成所需的信息。若要从中断处续训，还需保存并恢复优化器状态和已完成的训练步数。
 
 ## 安装和同步依赖
 
